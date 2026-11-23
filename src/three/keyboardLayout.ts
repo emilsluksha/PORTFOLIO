@@ -26,7 +26,7 @@ export interface KeyboardGeometryData {
 }
 
 const KEY_UNIT = 0.158
-const KEY_GAP = 0.017
+const KEY_GAP = 0.0205
 
 interface RowSpec {
   label: string

@@ -338,6 +338,7 @@ export function StudioScene({
   const lidTlRef = useRef<gsap.core.Timeline | null>(null)
   const presetTlRef = useRef<gsap.core.Timeline | null>(null)
   const resetTlRef = useRef<gsap.core.Timeline | null>(null)
+  const textureSwapCallRef = useRef<gsap.core.Tween | null>(null)
 
   // 1. CINEMATIC INITIAL LOAD SWEEP-IN
   useEffect(() => {
@@ -368,42 +369,47 @@ export function StudioScene({
     }
   }, [introReady, reducedMotion])
 
-  // 2. SIGNATURE 3D ROTATING COLOR TRANSITION (Rapid-click resilient state machine)
+  // 2. SIGNATURE 3D ROTATING COLOR TRANSITION (Rapid-click resilient, zero scene rebuild)
   useEffect(() => {
     if (selectedColor === lastColorRef.current) return
+    const prevColor = lastColorRef.current
     lastColorRef.current = selectedColor
 
     const theme = AURA_FINISHES[selectedColor]
     const laptop = laptopRef.current
     if (!laptop) return
 
-    const targetChassis = new THREE.Color(theme.chassisColor)
     const targetChamfer = new THREE.Color(theme.chassisAccent)
     const targetTrackpad = new THREE.Color(theme.trackpadTint)
     const targetLogo = new THREE.Color(theme.logoTint)
-    const targetWpA = new THREE.Color(theme.wallpaperA)
-    const targetWpB = new THREE.Color(theme.wallpaperB)
-    const targetWpC = new THREE.Color(theme.wallpaperC)
 
     const targetKey = new THREE.Color(theme.keyLightColor)
     const targetRim = new THREE.Color(theme.rimLightColor)
     const targetFill = new THREE.Color(theme.fillLightColor)
     const targetAmbient = new THREE.Color(theme.ambientLightColor)
 
-    // Kill previous color/light tweens cleanly so rapid clicks retarget mid-flight
+    // Kill previous color/light/texture-swap tweens cleanly so rapid clicks retarget mid-flight
     materialTlRef.current?.kill()
     lightTlRef.current?.kill()
+    textureSwapCallRef.current?.kill()
+
+    // Prepare smooth OLED wallpaper cross-fade between preloaded user-provided screen textures
+    const prevScreenTex =
+      laptop.wallpaperUniforms.uMix.value >= 0.5
+        ? laptop.wallpaperUniforms.uNextMap.value
+        : laptop.getScreenTexture(prevColor)
+    laptop.wallpaperUniforms.uPrevMap.value = prevScreenTex
+    laptop.wallpaperUniforms.uNextMap.value = laptop.getScreenTexture(selectedColor)
+    laptop.wallpaperUniforms.uMix.value = 0
 
     if (reducedMotion) {
+      laptop.applyColorTextures(selectedColor)
       const mTl = gsap.timeline()
-      const dur = 0.5
-      mTl.to(laptop.chassisMaterial.color, { r: targetChassis.r, g: targetChassis.g, b: targetChassis.b, duration: dur, ease: 'power2.inOut' }, 0)
+      const dur = 0.48
       mTl.to(laptop.chamferMaterial.color, { r: targetChamfer.r, g: targetChamfer.g, b: targetChamfer.b, duration: dur, ease: 'power2.inOut' }, 0)
       mTl.to(laptop.trackpadMaterial.color, { r: targetTrackpad.r, g: targetTrackpad.g, b: targetTrackpad.b, duration: dur, ease: 'power2.inOut' }, 0)
       mTl.to(laptop.logoMaterial.color, { r: targetLogo.r, g: targetLogo.g, b: targetLogo.b, duration: dur, ease: 'power2.inOut' }, 0)
-      mTl.to(laptop.wallpaperUniforms.uColorA.value, { r: targetWpA.r, g: targetWpA.g, b: targetWpA.b, duration: dur, ease: 'power2.inOut' }, 0)
-      mTl.to(laptop.wallpaperUniforms.uColorB.value, { r: targetWpB.r, g: targetWpB.g, b: targetWpB.b, duration: dur, ease: 'power2.inOut' }, 0)
-      mTl.to(laptop.wallpaperUniforms.uColorC.value, { r: targetWpC.r, g: targetWpC.g, b: targetWpC.b, duration: dur, ease: 'power2.inOut' }, 0)
+      mTl.to(laptop.wallpaperUniforms.uMix, { value: 1, duration: dur, ease: 'power2.inOut' }, 0)
       materialTlRef.current = mTl
 
       const lTl = gsap.timeline()
@@ -415,12 +421,11 @@ export function StudioScene({
       return
     }
 
-    // --- FULL CINEMATIC SPIN & CONCEALED MORPH (1.18s) ---
+    // --- FULL CINEMATIC SPIN & CONCEALED TEXTURE/MATERIAL MORPH (1.18s) ---
     spinTlRef.current?.kill()
 
     const TWO_PI = Math.PI * 2
     const currentY = spinState.current.y
-    // Guarantee continuous forward spin landing cleanly on the next exact multiple of 2π
     const minEnd = currentY + TWO_PI * 0.82
     const targetY = Math.ceil(minEnd / TWO_PI) * TWO_PI
     const spanY = targetY - currentY
@@ -428,7 +433,6 @@ export function StudioScene({
 
     const sTl = gsap.timeline({
       onComplete: () => {
-        // Silently wrap to 0 mod 2π (visually identical, zero float drift)
         spinState.current.y = 0
       },
     })
@@ -462,17 +466,19 @@ export function StudioScene({
     )
     spinTlRef.current = sTl
 
-    // Step 3 & 4: Concealed material + OLED wallpaper transformation across the spin apex
-    const mTl = gsap.timeline({ delay: 0.27 })
-    const morphDur = 0.44
+    // Step 3 & 4: Swap preloaded anodized metal/lid/bottom textures cleanly at peak spin velocity
+    textureSwapCallRef.current = gsap.delayedCall(0.35, () => {
+      laptop.applyColorTextures(selectedColor)
+    })
+
+    // Smoothly morph chamfer, trackpad, logo tint & cross-fade OLED wallpaper texture across spin apex
+    const mTl = gsap.timeline({ delay: 0.25 })
+    const morphDur = 0.46
     const morphEase = 'power2.inOut'
-    mTl.to(laptop.chassisMaterial.color, { r: targetChassis.r, g: targetChassis.g, b: targetChassis.b, duration: morphDur, ease: morphEase }, 0)
     mTl.to(laptop.chamferMaterial.color, { r: targetChamfer.r, g: targetChamfer.g, b: targetChamfer.b, duration: morphDur, ease: morphEase }, 0)
     mTl.to(laptop.trackpadMaterial.color, { r: targetTrackpad.r, g: targetTrackpad.g, b: targetTrackpad.b, duration: morphDur, ease: morphEase }, 0)
     mTl.to(laptop.logoMaterial.color, { r: targetLogo.r, g: targetLogo.g, b: targetLogo.b, duration: morphDur, ease: morphEase }, 0)
-    mTl.to(laptop.wallpaperUniforms.uColorA.value, { r: targetWpA.r, g: targetWpA.g, b: targetWpA.b, duration: morphDur, ease: morphEase }, 0)
-    mTl.to(laptop.wallpaperUniforms.uColorB.value, { r: targetWpB.r, g: targetWpB.g, b: targetWpB.b, duration: morphDur, ease: morphEase }, 0)
-    mTl.to(laptop.wallpaperUniforms.uColorC.value, { r: targetWpC.r, g: targetWpC.g, b: targetWpC.b, duration: morphDur, ease: morphEase }, 0)
+    mTl.to(laptop.wallpaperUniforms.uMix, { value: 1, duration: morphDur, ease: morphEase }, 0)
     materialTlRef.current = mTl
 
     // Step 7 & 8: Synchronized studio lighting glide
@@ -630,6 +636,7 @@ export function StudioScene({
       lidTlRef.current?.kill()
       presetTlRef.current?.kill()
       resetTlRef.current?.kill()
+      textureSwapCallRef.current?.kill()
     }
   }, [])
 
@@ -853,8 +860,8 @@ export function StudioScene({
       )
 
       const kbFactor = isLidOpen ? lidOpenness : lidControlState.current.kbGlow
-      laptop.keyboardLegendMaterial.opacity = 0.25 + kbFactor * 0.65
-      laptop.keyboardUnderGlowMaterial.opacity = kbFactor * (0.14 + section4GlowBoost * 0.4)
+      laptop.keyTopMaterial.emissiveIntensity = kbFactor * (0.48 + section4GlowBoost * 0.6)
+      laptop.keyboardUnderGlowMaterial.opacity = kbFactor * (0.09 + section4GlowBoost * 0.25)
     }
 
     // Subtle dynamic studio shadow response to float & spin lift
@@ -881,70 +888,71 @@ export function StudioScene({
   return (
     <>
       {/* ============================================================
-          PROCEDURAL LUXURY STUDIO HDRI ENVIRONMENT (Zero external files)
-          Provides crisp Apple-style anodized chamfer & glass strip reflections
+          PROCEDURAL LUXURY STUDIO HDRI ENVIRONMENT
+          Sculpted softboxes that reveal anodized metal contours & 3D keycap bevels
          ============================================================ */}
       <Environment resolution={256} frames={1}>
-        {/* Rear-angled overhead softbox strip: crisp chamfer glint without pale palm-rest washout */}
+        {/* Steep overhead-front softbox: highlights top edges & keycaps without hitting flat palm-rest grazing angle */}
         <Lightformer
           form="rect"
           intensity={1.15}
           color="#FFFFFF"
-          scale={[10, 2.0, 1]}
-          position={[0, 7.6, -4.0]}
-          rotation={[Math.PI / 2.8, 0, 0]}
+          scale={[8.5, 1.8, 1]}
+          position={[0, 9.2, 4.6]}
+          rotation={[Math.PI / 2.1, 0, 0]}
         />
-        {/* Crisp left studio rim strip */}
+        {/* Sculpted left studio rim strip */}
         <Lightformer
           form="rect"
-          intensity={1.95}
-          color="#F5F7FF"
-          scale={[1.8, 8, 1]}
-          position={[-8.0, 2.5, 2.4]}
-          rotation={[0, Math.PI / 2.2, 0]}
+          intensity={1.75}
+          color="#F5F8FF"
+          scale={[1.6, 7.5, 1]}
+          position={[-8.8, 4.6, 2.2]}
+          rotation={[0, Math.PI / 2.1, 0]}
         />
-        {/* Warm right studio fill softbox */}
+        {/* Warm right studio side strip */}
         <Lightformer
           form="rect"
-          intensity={1.45}
-          color="#FFF3E8"
-          scale={[2.8, 7.0, 1]}
-          position={[8.0, 2.1, 1.6]}
-          rotation={[0, -Math.PI / 2.2, 0]}
+          intensity={1.35}
+          color="#FFF3E6"
+          scale={[2.0, 6.8, 1]}
+          position={[8.8, 4.4, 1.8]}
+          rotation={[0, -Math.PI / 2.1, 0]}
         />
-        {/* Rear architectural halo graze for dramatic outer lid & AURA emblem sheen */}
-        <Lightformer
-          form="ring"
-          intensity={2.2}
-          color="#FFFFFF"
-          scale={7.2}
-          position={[0, 3.0, -7.8]}
-        />
-        {/* Subtle lower bounce card */}
+        {/* Gentle low-glare rear diffused softbox: illuminates outer anodized lid & 3D AURA logo clearly without blowing out front deck */}
         <Lightformer
           form="rect"
-          intensity={0.48}
-          color="#C8CED8"
-          scale={[10, 10, 1]}
-          position={[0, -5.8, 0]}
+          intensity={1.08}
+          color="#F0F2F6"
+          scale={[12, 6.2, 1]}
+          position={[0, 1.8, -9.4]}
+        />
+        {/* Subtle lower bounce card so underside cooling vents & rubber feet stay readable */}
+        <Lightformer
+          form="rect"
+          intensity={0.78}
+          color="#D2D8E2"
+          scale={[11, 11, 1]}
+          position={[0, -6.2, 0]}
           rotation={[-Math.PI / 2, 0, 0]}
         />
       </Environment>
 
       {/* ============================================================
           SYNCHRONIZED STUDIO LIGHT RIG (Color-morphed smoothly by GSAP)
+          Balanced brightness so every chassis chamfer & 3D keycap reads clearly
          ============================================================ */}
-      <ambientLight ref={ambientLightRef} intensity={0.38} color={initialTheme.ambientLightColor} />
+      <ambientLight ref={ambientLightRef} intensity={0.86} color={initialTheme.ambientLightColor} />
 
-      {/* Hero Key Softbox Light */}
+      {/* Raking Hero Key Softbox Light (casts subtle contact depth across 3D keys & hinge) */}
       <directionalLight
         ref={keyLightRef}
-        position={[5.2, 5.4, 5.6]}
-        intensity={1.25}
+        position={[4.6, 5.2, 5.0]}
+        intensity={1.72}
         color={initialTheme.keyLightColor}
         castShadow
-        shadow-mapSize={[512, 512]}
-        shadow-bias={-0.0005}
+        shadow-mapSize={[1024, 1024]}
+        shadow-bias={-0.0004}
         shadow-camera-near={1}
         shadow-camera-far={20}
         shadow-camera-left={-4}
@@ -953,24 +961,28 @@ export function StudioScene({
         shadow-camera-bottom={-4}
       />
 
-      {/* Sculptural Color-Matched Rim Light */}
+      {/* Sculptural Color-Matched Rear/Rim Light (lights outer lid back & bevel edges cleanly) */}
       <directionalLight
         ref={rimLightRef}
-        position={[-5.4, 3.4, -4.6]}
-        intensity={2.3}
+        position={[-4.8, 3.6, -5.2]}
+        intensity={2.8}
         color={initialTheme.rimLightColor}
       />
 
-      {/* Soft Studio Side Fill */}
+      {/* Soft Front-Left Studio Fill (reveals dark keycap faces, ports & recessed keyboard pocket) */}
       <directionalLight
         ref={fillLightRef}
-        position={[-4.8, 1.6, 4.2]}
-        intensity={0.78}
+        position={[-4.6, 2.5, 4.6]}
+        intensity={1.26}
         color={initialTheme.fillLightColor}
       />
 
-      {/* Delicate side-grazing accent for keyboard & chamfer highlights */}
-      <pointLight position={[3.2, 2.8, 3.6]} intensity={0.42} distance={14} color="#FFFFFF" />
+      {/* Balanced rear-right fill so outer anodized lid stays vivid and legible across its full width */}
+      <directionalLight position={[4.5, 3.0, -5.2]} intensity={1.38} color="#FFF7F0" />
+
+      {/* Low grazing keycap-relief rim accent highlighting all 78 sculpted keycap bevels */}
+      <pointLight position={[-2.6, 2.0, 2.8]} intensity={0.58} distance={14} color="#FFFFFF" />
+      <pointLight position={[3.0, 2.1, 3.2]} intensity={0.38} distance={14} color="#FFF8F0" />
 
       {/* ============================================================
           HIERARCHICAL ANIMATED LAPTOP RIG
